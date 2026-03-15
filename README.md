@@ -31,7 +31,7 @@ The implemented loop follows the paper's reflect-then-synthesize design:
 ## Repository Layout
 
 ```text
-TTSR-mian/
+main/
   verl/                       # New verl backend
   ttsr/
     reward_managers.py        # Student and Teacher reward logic
