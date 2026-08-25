@@ -3,9 +3,7 @@
   TTSR: Test-Time Self-Evolving via Reflection
 </h1>
 
-Paper-aligned TTSR implementation on top of `verl`.
-
-This repository provides a runnable training backend for the paper pipeline:
+This repository provides a training backend for the pipeline:
 - Student adaptation with GRPO and majority-vote pseudo labels
 - Teacher reflection from failed trajectories
 - Teacher GRPO training with Student-evaluated frontier rewards
