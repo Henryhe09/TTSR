@@ -19,7 +19,7 @@ TTSR targets two bottlenecks in test-time training on hard reasoning tasks:
 - Noisy pseudo-label rewards on overly difficult questions
 - Inefficient exploration without explicit failure diagnosis
 
-The implemented loop follows the paper's reflect-then-synthesize design:
+The implemented loop follows  reflect-then-synthesize design:
 1. Student samples multiple rollouts and is trained with GRPO using majority-vote pseudo targets.
 2. Teacher analyzes failed traces and extracts structured weakness descriptors.
 3. Weakness memory is updated and compiled into strategy guidance.
