@@ -10,7 +10,7 @@ This repository provides a training backend for the pipeline:
 - Reflection-guided variant synthesis
 - Multi-round co-evolution loop with weakness memory
 
-![Pipeline](assets/pipeline.png)
+![Pipeline](assets/pipeline.pdf)
 ![Training and Cross-Domain Dynamics](assets/training_dynamics_combined.png)
 
 ## Method Summary
