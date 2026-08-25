@@ -155,10 +155,5 @@ Each round typically includes:
 
 - This repository is implemented for the new `verl` architecture and does not depend on legacy TTCS code.
 - `reflect.py` and `synthesize.py` require `vllm` at runtime.
-## Paper-aligned execution requirements
-
-This branch treats `TEST_FILE` as the complete original question set \(\mathcal{X}_{test}\). Each next-round dataset is the full original set union the Teacher variants; it is not a random real-data subsample.
-
-The Teacher reward is evaluated from a frozen snapshot of the just-trained Student. For each valid generated question, the evaluator samples `ROLLOUT_N` Student responses, computes the majority-vote pseudo-correctness `s`, and returns `4s(1-s) - lambda * R_sim`. The loop also writes `variant_rollout_cache.jsonl` containing those Student rollouts for audit and future offline-reuse integration.
 
 The evaluator must use GPU resources separate from GRPO. Set `TRAIN_CUDA_VISIBLE_DEVICES` to the GPUs used by Student/Teacher GRPO and `STUDENT_EVAL_CUDA_VISIBLE_DEVICES` to the reserved evaluator GPU(s), or set `STUDENT_EVAL_URL` to an externally managed evaluator endpoint. `N_GPUS` must equal the number of GPUs exposed through `TRAIN_CUDA_VISIBLE_DEVICES`.
