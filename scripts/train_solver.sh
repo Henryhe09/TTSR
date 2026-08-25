@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -61,7 +61,8 @@ python -m verl.trainer.main_ppo \
   reward.reward_manager.name=TTSRMajorityRewardManager \
   reward.reward_manager.module.path=ttsr.reward_managers \
   +reward.reward_kwargs.group_wait_ms=80 \
-  +reward.reward_kwargs.result_timeout_s=5.0 \
+  +reward.reward_kwargs.result_timeout_s=30.0 \
+  +reward.reward_kwargs.expected_group_size="${ROLLOUT_N}" \
   trainer.critic_warmup=0 \
   trainer.logger='["console","tensorboard"]' \
   trainer.project_name="${PROJECT_NAME}" \
@@ -77,4 +78,3 @@ python -m verl.trainer.main_ppo \
   trainer.validation_data_dir="${OUTPUT_DIR}/validation_data" \
   trainer.default_local_dir="${OUTPUT_DIR}/ckpts" \
   "$@"
-

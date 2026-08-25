@@ -7,20 +7,20 @@ from typing import Any
 from ttsr.io_utils import read_jsonl, try_parse_json_object, write_jsonl
 from ttsr.memory import WeaknessMemory
 from ttsr.prompts import synthesis_prompt
+from ttsr.teacher_reward import evaluate_questions
 
 
 QUESTION_RE = re.compile(r"<question>(.*?)</question>", re.DOTALL)
 
 
-def _extract_question(text: str) -> str:
+def _extract_question(text: str, allow_plain: bool = False) -> str:
     text = (text or "").strip()
     if not text:
         return ""
     matches = QUESTION_RE.findall(text)
     if matches:
         return matches[-1].strip()
-    return ""
-
+    return text if allow_plain else ""
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Teacher synthesis for TTSR variants.")
@@ -34,6 +34,9 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--student_eval_url", type=str, required=True)
+    parser.add_argument("--student_eval_timeout_s", type=float, default=240.0)
+    parser.add_argument("--rollout_cache", type=str, required=True)
     args = parser.parse_args()
 
     try:
@@ -89,7 +92,7 @@ def main() -> None:
         obj = try_parse_json_object(raw)
         q = ""
         if obj:
-            q = _extract_question(str(obj.get("generated_question", "")))
+            q = _extract_question(str(obj.get("generated_question", "")), allow_plain=True)
         if not q:
             q = _extract_question(raw)
 
@@ -104,7 +107,12 @@ def main() -> None:
         )
         debug.append({"source_uid": src.get("uid", ""), "parsed_ok": bool(q), "raw": raw})
 
+    valid_rows = [row for row in rows if str(row.get("question", "")).strip()]
+    evaluations = evaluate_questions(args.student_eval_url, [str(row["question"]) for row in valid_rows], args.student_eval_timeout_s)
+    for row, evaluation in zip(valid_rows, evaluations, strict=True):
+        row["student_evaluation"] = evaluation
     write_jsonl(args.out, rows)
+    write_jsonl(args.rollout_cache, valid_rows)
     write_jsonl(Path(args.out).with_suffix(".debug.jsonl"), debug)
     print(f"[synthesize] saved {len(rows)} rows -> {args.out}")
 

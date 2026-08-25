@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,9 +9,9 @@ TEACHER_TRAIN_FILE="${TEACHER_TRAIN_FILE:-}"
 TEACHER_VAL_FILE="${TEACHER_VAL_FILE:-${TEACHER_TRAIN_FILE}}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 
-if [ -z "${MODEL_PATH}" ] || [ -z "${TEACHER_TRAIN_FILE}" ] || [ -z "${OUTPUT_DIR}" ]; then
+if [ -z "${MODEL_PATH}" ] || [ -z "${TEACHER_TRAIN_FILE}" ] || [ -z "${OUTPUT_DIR}" ] || [ -z "${STUDENT_EVAL_URL:-}" ]; then
   echo "Usage:"
-  echo "  MODEL_PATH=... TEACHER_TRAIN_FILE=... OUTPUT_DIR=... bash scripts/train_teacher.sh"
+  echo "  MODEL_PATH=... TEACHER_TRAIN_FILE=... OUTPUT_DIR=... STUDENT_EVAL_URL=... bash scripts/train_teacher.sh"
   exit 1
 fi
 
@@ -27,7 +27,9 @@ PROJECT_NAME="${PROJECT_NAME:-ttsr_verl}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-teacher_grpo}"
 TTSR_TAU="${TTSR_TAU:-0.75}"
 TTSR_LAMBDA="${TTSR_LAMBDA:-1.0}"
-FRONTIER_TARGET_SIMILARITY="${FRONTIER_TARGET_SIMILARITY:-0.55}"
+STUDENT_EVAL_URL="${STUDENT_EVAL_URL:-}"
+STUDENT_EVAL_TIMEOUT_S="${STUDENT_EVAL_TIMEOUT_S:-240}"
+TEACHER_REWARD_RESULT_TIMEOUT_S="${TEACHER_REWARD_RESULT_TIMEOUT_S:-300}"
 
 cd "${VERL_DIR}"
 
@@ -60,13 +62,15 @@ python -m verl.trainer.main_ppo \
   algorithm.use_kl_in_reward=False \
   reward.num_workers=1 \
   reward.reward_manager.source=importlib \
-  reward.reward_manager.name=TTSRTeacherRewardManager \
-  reward.reward_manager.module.path=ttsr.reward_managers \
+  reward.reward_manager.name=TTSRStudentFrontierTeacherRewardManager \
+  reward.reward_manager.module.path=ttsr.teacher_reward \
   +reward.reward_kwargs.group_wait_ms=80 \
-  +reward.reward_kwargs.result_timeout_s=5.0 \
+  +reward.reward_kwargs.result_timeout_s="${TEACHER_REWARD_RESULT_TIMEOUT_S}" \
   +reward.reward_kwargs.ttsr_tau="${TTSR_TAU}" \
   +reward.reward_kwargs.ttsr_lambda="${TTSR_LAMBDA}" \
-  +reward.reward_kwargs.frontier_target_similarity="${FRONTIER_TARGET_SIMILARITY}" \
+  +reward.reward_kwargs.student_eval_url="${STUDENT_EVAL_URL}" \
+  +reward.reward_kwargs.student_eval_timeout_s="${STUDENT_EVAL_TIMEOUT_S}" \
+  +reward.reward_kwargs.expected_group_size="${ROLLOUT_N}" \
   trainer.critic_warmup=0 \
   trainer.logger='["console","tensorboard"]' \
   trainer.project_name="${PROJECT_NAME}" \
@@ -82,5 +86,3 @@ python -m verl.trainer.main_ppo \
   trainer.validation_data_dir="${OUTPUT_DIR}/validation_data" \
   trainer.default_local_dir="${OUTPUT_DIR}/ckpts" \
   "$@"
-
-

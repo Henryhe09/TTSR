@@ -8,7 +8,7 @@ from typing import Any
 from verl import DataProto
 from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
 
-from ttsr.io_utils import extract_final_answer, try_parse_json_object
+from ttsr.io_utils import extract_final_answer
 
 
 @dataclass
@@ -70,6 +70,7 @@ class TTSRMajorityRewardManager(RewardManagerBase):
         self.group_wait_ms = int(reward_kwargs.get("group_wait_ms", 80))
         self.result_timeout_s = float(reward_kwargs.get("result_timeout_s", 5.0))
         self.default_empty_reward = float(reward_kwargs.get("default_empty_reward", 0.0))
+        self.expected_group_size = max(1, int(reward_kwargs.get("expected_group_size", 1)))
         self._group_items: dict[str, list[_PendingItem]] = defaultdict(list)
         self._group_timer_set: set[str] = set()
         self._lock = asyncio.Lock()
@@ -99,7 +100,9 @@ class TTSRMajorityRewardManager(RewardManagerBase):
 
         async with self._lock:
             self._group_items[group_uid].append(pending)
-            if group_uid not in self._group_timer_set:
+            if len(self._group_items[group_uid]) >= self.expected_group_size:
+                self.loop.call_soon(lambda gid=group_uid: asyncio.create_task(self._finalize_group(gid)))
+            elif group_uid not in self._group_timer_set:
                 self._group_timer_set.add(group_uid)
                 delay_s = max(0.001, self.group_wait_ms / 1000.0)
                 self.loop.call_later(delay_s, lambda gid=group_uid: asyncio.create_task(self._finalize_group(gid)))
@@ -148,133 +151,6 @@ class TTSRMajorityRewardManager(RewardManagerBase):
                     "extracted_answer": item.extracted_answer,
                     "group_size": group_size,
                     "majority_count": majority_count,
-                    "acc": reward,
-                    "timeout": False,
-                },
-            }
-            if not item.future.done():
-                item.future.set_result(result)
-
-
-class TTSRTeacherRewardManager(RewardManagerBase):
-    """Teacher reward manager with frontier-like difficulty proxy and similarity penalty.
-
-    Reward:
-      R_T = max(0, R_frontier - lambda * R_sim), if format is valid; else 0.
-    """
-
-    def __init__(self, config, tokenizer, compute_score=None, **kwargs):
-        super().__init__(config=config, tokenizer=tokenizer, compute_score=compute_score)
-        reward_kwargs = config.reward.get("reward_kwargs", {})
-        self.group_wait_ms = int(reward_kwargs.get("group_wait_ms", 80))
-        self.result_timeout_s = float(reward_kwargs.get("result_timeout_s", 5.0))
-        self.default_empty_reward = float(reward_kwargs.get("default_empty_reward", 0.0))
-        self.ttsr_tau = float(reward_kwargs.get("ttsr_tau", 0.75))
-        self.ttsr_lambda = float(reward_kwargs.get("ttsr_lambda", 1.0))
-        self.frontier_target_similarity = float(reward_kwargs.get("frontier_target_similarity", 0.55))
-
-        self._group_items: dict[str, list[_TeacherPendingItem]] = defaultdict(list)
-        self._group_timer_set: set[str] = set()
-        self._lock = asyncio.Lock()
-
-    async def run_single(self, data: DataProto) -> dict[str, Any]:
-        assert len(data) == 1, "TTSRTeacherRewardManager expects a single item."
-        item = data[0]
-
-        response_ids = item.batch["responses"]
-        response_length = response_ids.shape[-1]
-        valid_response_length = item.batch["attention_mask"][-response_length:].sum()
-        valid_response_ids = response_ids[:valid_response_length]
-        response_text = await self.loop.run_in_executor(
-            None, lambda: self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
-        )
-
-        generated_question, format_ok = _extract_generated_question(response_text)
-        extra_info = item.non_tensor_batch.get("extra_info", {}) or {}
-        reference_question = str(extra_info.get("reference_question", "")).strip()
-        uid_value = item.non_tensor_batch.get("uid", "")
-        group_uid = str(uid_value) if str(uid_value) else f"fallback::{hash(reference_question)}"
-
-        future: asyncio.Future = self.loop.create_future()
-        pending = _TeacherPendingItem(
-            generated_question=generated_question,
-            reference_question=reference_question,
-            format_ok=format_ok,
-            future=future,
-        )
-
-        async with self._lock:
-            self._group_items[group_uid].append(pending)
-            if group_uid not in self._group_timer_set:
-                self._group_timer_set.add(group_uid)
-                delay_s = max(0.001, self.group_wait_ms / 1000.0)
-                self.loop.call_later(delay_s, lambda gid=group_uid: asyncio.create_task(self._finalize_group(gid)))
-
-        try:
-            return await asyncio.wait_for(future, timeout=self.result_timeout_s)
-        except asyncio.TimeoutError:
-            return {
-                "reward_score": self.default_empty_reward,
-                "reward_extra_info": {
-                    "group_uid": group_uid,
-                    "generated_question": generated_question,
-                    "reference_question": reference_question,
-                    "format_ok": int(format_ok),
-                    "frontier": 0.0,
-                    "r_sim": 0.0,
-                    "acc": 0.0,
-                    "timeout": True,
-                },
-            }
-
-    async def _finalize_group(self, group_uid: str) -> None:
-        async with self._lock:
-            items = self._group_items.pop(group_uid, [])
-            self._group_timer_set.discard(group_uid)
-
-        if not items:
-            return
-
-        target = self.frontier_target_similarity
-        denom_frontier = max(target, 1.0 - target, 1e-6)
-        group_size = len(items)
-        questions = [x.generated_question for x in items]
-
-        for i, item in enumerate(items):
-            format_ok = bool(item.format_ok and item.generated_question.strip())
-            if not format_ok:
-                reward = self.default_empty_reward
-                frontier = 0.0
-                r_sim = 0.0
-                sim_to_ref = 0.0
-            else:
-                sim_to_ref = _token_similarity(item.generated_question, item.reference_question)
-                frontier = max(0.0, 1.0 - abs(sim_to_ref - target) / denom_frontier)
-
-                sim_sum = max(0.0, sim_to_ref - self.ttsr_tau)
-                count = 1
-                for j, other_q in enumerate(questions):
-                    if i == j or not other_q.strip():
-                        continue
-                    sim_ij = _token_similarity(item.generated_question, other_q)
-                    sim_sum += max(0.0, sim_ij - self.ttsr_tau)
-                    count += 1
-                r_sim = sim_sum / max(1, count)
-                reward = max(0.0, frontier - self.ttsr_lambda * r_sim)
-
-            result = {
-                "reward_score": reward,
-                "reward_extra_info": {
-                    "group_uid": group_uid,
-                    "generated_question": item.generated_question,
-                    "reference_question": item.reference_question,
-                    "group_size": group_size,
-                    "format_ok": int(format_ok),
-                    "sim_to_ref": sim_to_ref,
-                    "frontier": frontier,
-                    "r_sim": r_sim,
-                    "tau": self.ttsr_tau,
-                    "lambda": self.ttsr_lambda,
                     "acc": reward,
                     "timeout": False,
                 },

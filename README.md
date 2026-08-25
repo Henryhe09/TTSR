@@ -1,14 +1,14 @@
-﻿<h1>
+<h1>
   <img src="assets/student.png" alt="TTSR Icon" width="64" />
   TTSR: Test-Time Self-Evolving via Reflection
 </h1>
 
-Official project codebase for the TTSR paper implementation on top of `verl`.
+Paper-aligned TTSR implementation on top of `verl`.
 
 This repository provides a runnable training backend for the paper pipeline:
 - Student adaptation with GRPO and majority-vote pseudo labels
 - Teacher reflection from failed trajectories
-- Teacher GRPO training for synthesis policy
+- Teacher GRPO training with Student-evaluated frontier rewards
 - Reflection-guided variant synthesis
 - Multi-round co-evolution loop with weakness memory
 
@@ -53,7 +53,7 @@ main/
 ## Environment Setup
 
 ```bash
-cd /path/to/TTSR-mian
+cd ./TTSR_paper_faithful
 bash scripts/setup_env.sh
 source .venv/bin/activate
 ```
@@ -68,7 +68,7 @@ Convert raw data (`json` / `jsonl` / `parquet`) to verl-compatible parquet:
 
 ```bash
 python scripts/prepare_dataset.py \
-  --input /path/to/raw.jsonl \
+  --input ./data/raw.jsonl \
   --output_dir ./data/myset \
   --data_source ttsr_math \
   --question_keys question,problem \
@@ -84,7 +84,7 @@ Outputs:
 ### 1) Train Student once (GRPO)
 
 ```bash
-MODEL_PATH=/path/to/model \
+MODEL_PATH=./models/base \
 TRAIN_FILE=./data/myset/train.parquet \
 VAL_FILE=./data/myset/test.parquet \
 OUTPUT_DIR=./runs/solver_round1 \
@@ -94,7 +94,7 @@ bash scripts/train_solver.sh
 ### 2) Train Teacher once (GRPO)
 
 ```bash
-MODEL_PATH=/path/to/model \
+MODEL_PATH=./models/base \
 TEACHER_TRAIN_FILE=./runs/round_1/teacher_train.parquet \
 TEACHER_VAL_FILE=./runs/round_1/teacher_train.parquet \
 OUTPUT_DIR=./runs/teacher_round1 \
@@ -126,19 +126,19 @@ Per round (`run_ttsr_loop.sh`):
 
 - Teacher reward manager: `TTSRTeacherRewardManager`
   - file: `ttsr/reward_managers.py`
-  - logic: frontier proxy minus similarity penalty
-  - key knobs: `FRONTIER_TARGET_SIMILARITY`, `TTSR_TAU`, `TTSR_LAMBDA`
+  - logic: `4 s(x')(1-s(x'))` from frozen Student rollouts minus similarity penalty
+  - key knobs: `TTSR_TAU`, `TTSR_LAMBDA`, `STUDENT_EVAL_URL`
 
 ## Main Config Knobs
 
 From `configs/ttsr.env.example`:
-- `MODEL_PATH`, `BASE_TRAIN`, `BASE_VAL`
-- `ROUNDS`, `MAX_VARIANTS`, `REAL_RATIO`
+- `MODEL_PATH`, `TEST_FILE`, `VAL_FILE`
+- `ROUNDS`, `MAX_VARIANTS`, `ROLLOUT_N`
 - `ROLLOUT_N`, `TRAIN_BATCH_SIZE`, `N_GPUS`
 - `TEACHER_TOTAL_STEPS`, `TEACHER_TOTAL_EPOCHS`
 - `TEACHER_ROLLOUT_N`, `TEACHER_TRAIN_BATCH_SIZE`
 - `TEACHER_MAX_TRAIN_SAMPLES`
-- `FRONTIER_TARGET_SIMILARITY`, `TTSR_TAU`, `TTSR_LAMBDA`
+- `TTSR_TAU`, `TTSR_LAMBDA`, `STUDENT_EVAL_URL`
 
 ## Outputs
 
@@ -157,8 +157,10 @@ Each round typically includes:
 
 - This repository is implemented for the new `verl` architecture and does not depend on legacy TTCS code.
 - `reflect.py` and `synthesize.py` require `vllm` at runtime.
+## Paper-aligned execution requirements
 
+This branch treats `TEST_FILE` as the complete original question set \(\mathcal{X}_{test}\). Each next-round dataset is the full original set union the Teacher variants; it is not a random real-data subsample.
 
+The Teacher reward is evaluated from a frozen snapshot of the just-trained Student. For each valid generated question, the evaluator samples `ROLLOUT_N` Student responses, computes the majority-vote pseudo-correctness `s`, and returns `4s(1-s) - lambda * R_sim`. The loop also writes `variant_rollout_cache.jsonl` containing those Student rollouts for audit and future offline-reuse integration.
 
-
-
+The evaluator must use GPU resources separate from GRPO. Set `TRAIN_CUDA_VISIBLE_DEVICES` to the GPUs used by Student/Teacher GRPO and `STUDENT_EVAL_CUDA_VISIBLE_DEVICES` to the reserved evaluator GPU(s), or set `STUDENT_EVAL_URL` to an externally managed evaluator endpoint. `N_GPUS` must equal the number of GPUs exposed through `TRAIN_CUDA_VISIBLE_DEVICES`.
